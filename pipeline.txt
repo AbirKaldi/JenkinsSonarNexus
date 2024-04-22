@@ -1,0 +1,94 @@
+pipeline {
+    agent any
+   
+    tools {
+        nodejs "your-project-node"
+    }
+   
+    stages {
+        stage("Récupération du code") {
+            steps {
+                git branch: 'main', credentialsId: 'gitlab_Auth_UNPW', url: 'https://gitlab.com/ghassen2183407/application1.git'
+            }
+        }
+        stage('Build') {
+            steps {
+                dir('/var/jenkins_home/workspace/pipeline_pfe/source/DevOpsFront/') {
+                    sh 'npm run build --prod'
+                }
+            }
+        }
+       
+        stage('Code Quality Check via SonarQube') {
+            steps {
+                script {
+                    def scannerHome = tool 'sonarqube-scanner';
+                    withSonarQubeEnv("sonarqube-container") {
+                        sh "${tool("sonarqube-scanner")}/bin/sonar-scanner \
+                        -Dsonar.projectKey=my-application \
+                        -Dsonar.sources=. \
+                        -Dsonar.css.node=. \
+                        -Dsonar.host.url=http://172.24.0.4:9000 \
+                        -Dsonar.login=sqp_1248b8bcf350cbf5fde981420f580a2d9276029d"
+                    }
+                }
+            }
+        }
+        stage('Quality Gates') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    script {
+                        def qg = waitForQualityGate()
+                        if (qg.status != 'OK') {
+                            error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                        }
+                    }
+                }
+            }
+                post {
+                    failure {
+                        mail body: "<b>${currentBuild.currentResult}</b>: Job ${JOB_NAME} on build ${BUILD_NUMBER}<br> you can check console output at : ${BUILD_URL}",
+                        to: 'hghassen759@gmail.com',
+                        mimeType: 'text/html',
+                        subject: "[Jenkins] Build ${currentBuild.currentResult} for Job ${JOB_NAME}:${BUILD_NUMBER}"
+                    }
+                }  
+        }
+        stage('Création des images') {
+            steps {
+                script {
+                    dir('/var/jenkins_home/workspace/pipeline_pfe/source/DevOpsFront/') {
+                        sh 'docker build -t myfrontapps:latest .'                    }
+                    dir('/var/jenkins_home/workspace/pipeline_pfe/source/DevOpsProject/DevOpsProject/') {
+                        sh 'docker build -t mybackapps:latest .'
+                    }    
+                }
+            }
+        }    
+       
+        stage('Push to Nexus Repository') {
+            steps {
+                script {
+                    // Connexion à Docker Registry Nexus
+                    sh 'docker login -u admin -p admin localhost:8085'
+
+                    // Tag de l'image Docker
+                    sh 'docker tag myfrontapps localhost:8085/myfrontapps:v1.0'
+                    sh 'docker tag mybackapps localhost:8085/mybackapps:v1.0'
+
+                    // Pousse de l'image Docker vers Nexus Repository
+                    sh 'docker push localhost:8085/myfrontapps:v1.0'
+                    sh 'docker push localhost:8085/mybackapps:v1.0'
+                }
+            }
+        }
+    }
+    post {
+        failure {
+            mail body: "<b>${currentBuild.currentResult}</b>: Job ${JOB_NAME} on build ${BUILD_NUMBER}<br> you can check console output at : ${BUILD_URL}",
+            to: 'hghassen759@gmail.com',
+            mimeType: 'text/html',
+            subject: "[Jenkins] Build ${currentBuild.currentResult} for Job ${JOB_NAME}:${BUILD_NUMBER}"
+                    }
+                }
+}
